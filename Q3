@@ -1,0 +1,84 @@
+-- Create a table to aggregate monthly revenue and count of paying accounts
+WITH MonthlyRevenueTable AS (
+    -- Extract month from the invoice date and group the total revenue by month and plan
+    SELECT
+        strftime('%m', invoices.date) AS Month,
+        subscriptions.plan_id,
+        -- Sum only the amount of invoices that are paid
+        SUM(CASE WHEN invoices.paid = 1 THEN invoices.amount_due ELSE 0 END) AS total_revenue,
+        COUNT(CASE WHEN invoices.paid = 1 THEN invoices.date END) AS total_paying_accounts
+    FROM invoices
+    JOIN subscriptions 
+        ON subscriptions.id = invoices.subscription_id
+    WHERE strftime('%Y', invoices.date) = '2018'
+    GROUP BY
+        Month,
+        subscriptions.plan_id
+),
+
+-- Table to count the number of created subscriptions by month and plan
+CreatedSubscriptions AS (
+    SELECT 
+        subscriptions.plan_id,
+        strftime('%m', subscriptions.created) AS Month,
+        COUNT(*) AS created_count
+    FROM subscriptions
+    WHERE strftime('%Y', subscriptions.created) = '2018'
+    GROUP BY
+        subscriptions.plan_id,
+        Month
+),
+
+-- Table to count the number of cancelled subscriptions by month and plan
+CanceledSubscriptions AS (
+    SELECT 
+        subscriptions.plan_id,
+        strftime('%m', subscriptions.canceled_at) AS Month,
+        COUNT(*) AS canceled_count
+    FROM subscriptions
+    WHERE strftime('%Y', subscriptions.canceled_at) = '2018'
+    GROUP BY
+        subscriptions.plan_id,
+        Month
+)
+
+-- Main query to bring together the above tables and calculate Churn Rate and Lifetime Value
+SELECT 
+    CreatedSubscriptions.Month AS Month,
+    CreatedSubscriptions.plan_id AS Plan,
+    MonthlyRevenueTable.total_revenue AS MonthlyRevenue,
+    MonthlyRevenueTable.total_paying_accounts AS TotalPayingAccounts,
+
+    -- Calculate churn rate
+    ROUND(
+        CASE
+            WHEN CreatedSubscriptions.month = '01' THEN
+                CAST(IFNULL(CanceledSubscriptions.canceled_count, 0) AS FLOAT) * 100 / CreatedSubscriptions.created_count
+            ELSE
+                CAST(IFNULL(CanceledSubscriptions.canceled_count, 0) AS FLOAT) / (SUM(CreatedSubscriptions.created_count - IFNULL(CanceledSubscriptions.canceled_count, 0)) OVER (PARTITION BY CreatedSubscriptions.plan_id ORDER BY CreatedSubscriptions.month ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) + CreatedSubscriptions.created_count) * 100
+        END, 2) AS [ChurnRate (%)],
+
+    -- Calculate Lifetime Value
+    ROUND(
+        (MonthlyRevenueTable.total_revenue / MonthlyRevenueTable.total_paying_accounts) / 
+        (
+            CASE
+                WHEN CreatedSubscriptions.month = '01' THEN
+                    CAST(IFNULL(CanceledSubscriptions.canceled_count, 0) AS FLOAT) * 100 / CreatedSubscriptions.created_count
+                ELSE
+                    CAST(IFNULL(CanceledSubscriptions.canceled_count, 0) AS FLOAT) / (SUM(CreatedSubscriptions.created_count - IFNULL(CanceledSubscriptions.canceled_count, 0)) OVER (PARTITION BY CreatedSubscriptions.plan_id ORDER BY CreatedSubscriptions.month ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) + CreatedSubscriptions.created_count) * 100
+            END / 100
+        ), 2) AS [LifetimeValue ($)]
+
+-- Join tables together on common columns
+FROM CreatedSubscriptions
+LEFT JOIN CanceledSubscriptions 
+    ON CreatedSubscriptions.plan_id = CanceledSubscriptions.plan_id 
+    AND CreatedSubscriptions.month = CanceledSubscriptions.month
+LEFT JOIN MonthlyRevenueTable 
+    ON CreatedSubscriptions.plan_id = MonthlyRevenueTable.plan_id 
+    AND CreatedSubscriptions.month = MonthlyRevenueTable.month
+-- Sort by month and plan
+ORDER BY
+    CreatedSubscriptions.month,
+    CreatedSubscriptions.plan_id;

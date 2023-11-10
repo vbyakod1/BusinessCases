@@ -1,0 +1,23 @@
+-- Retrieve monthly revenue for each plan type for the year 2018
+
+SELECT
+    -- Extract month from the invoice date
+    strftime('%m', invoices.date) AS Month,
+    
+    -- Get the plan type
+    subscriptions.plan_id AS Plan,
+    
+    -- Calculate total revenue, considering only paid invoices
+    SUM(CASE WHEN invoices.paid = 1 THEN invoices.amount_due ELSE 0 END) AS TotalRevenue
+FROM 
+    invoices
+    -- Joining with subscriptions to get the plan type
+    JOIN subscriptions 
+    ON subscriptions.id = invoices.subscription_id
+WHERE 
+    -- Filter for invoices from the year 2018
+    strftime('%Y', invoices.date) = '2018'
+GROUP BY
+    Month,
+    subscriptions.plan_id;
+

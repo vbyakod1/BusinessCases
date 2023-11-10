@@ -1,0 +1,60 @@
+-- Define the number of subscriptions created each month
+WITH CreatedSubscriptions AS (
+    SELECT 
+        subscriptions.plan_id,
+        strftime('%m', subscriptions.created) AS Month,
+        COUNT(*) AS created_count
+    FROM 
+        subscriptions
+    WHERE
+        strftime('%Y', subscriptions.created) = '2018'
+    GROUP BY
+        subscriptions.plan_id,
+        Month
+),
+-- Define the number of subscriptions canceled each month
+CanceledSubscriptions AS (
+    SELECT 
+        subscriptions.plan_id,
+        strftime('%m', subscriptions.canceled_at) AS Month,
+        COUNT(*) AS canceled_count
+    FROM 
+        subscriptions
+    WHERE
+        strftime('%Y', subscriptions.canceled_at) = '2018'
+    GROUP BY
+        subscriptions.plan_id,
+        Month
+)
+
+-- Calculate the churn rate for each month and plan
+SELECT 
+    CreatedSubscriptions.Month AS Month,
+    CreatedSubscriptions.plan_id as Plan,
+    CreatedSubscriptions.created_count AS Created,
+    -- Handle both NULL and 'None' values for canceled_count
+    CASE
+        WHEN CanceledSubscriptions.canceled_count IS NULL OR CanceledSubscriptions.canceled_count = 'None' THEN 0
+        ELSE CanceledSubscriptions.canceled_count
+    END AS Cancelled,
+    -- Calculate the churn rate
+    ROUND(
+        CASE
+            WHEN CreatedSubscriptions.Month = '01' THEN
+                (CAST(IFNULL(CanceledSubscriptions.canceled_count, 0) AS FLOAT) * 100 / CreatedSubscriptions.created_count)
+            ELSE
+                (CAST(IFNULL(CanceledSubscriptions.canceled_count, 0) AS FLOAT) / 
+                (SUM(CreatedSubscriptions.created_count - IFNULL(CanceledSubscriptions.canceled_count, 0)) OVER (PARTITION BY CreatedSubscriptions.plan_id ORDER BY CreatedSubscriptions.month ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) + CreatedSubscriptions.created_count)) * 100
+        END, 2
+    ) AS [ChurnRate (%)]
+FROM 
+    CreatedSubscriptions
+-- Join the created and canceled data based on month and plan
+LEFT JOIN 
+    CanceledSubscriptions 
+ON 
+    CreatedSubscriptions.plan_id = CanceledSubscriptions.plan_id 
+    AND CreatedSubscriptions.Month = CanceledSubscriptions.Month
+ORDER BY
+    CreatedSubscriptions.Month,
+    CreatedSubscriptions.plan_id;
